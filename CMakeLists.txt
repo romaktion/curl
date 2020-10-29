@@ -398,7 +398,12 @@ if(CMAKE_USE_OPENSSL)
 		include_directories(${OPENSSL_INCLUDE_DIR})
 	endif()
   else()
-    list(APPEND CURL_LIBS ssl crypto)
+	add_library(boringssl STATIC IMPORTED)
+	set_target_properties(boringssl PROPERTIES IMPORTED_LOCATION ${BORINGSSL_SSL_LIBRARY})
+	add_library(boringcrypto STATIC IMPORTED)
+	set_target_properties(boringcrypto PROPERTIES IMPORTED_LOCATION ${BORINGSSL_CRYPTO_LIBRARY})
+  
+    list(APPEND CURL_LIBS boringssl boringcrypto)
   endif()
 
   set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
