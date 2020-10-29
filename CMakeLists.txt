@@ -403,6 +403,9 @@ if(CMAKE_USE_OPENSSL)
 	add_library(boringcrypto STATIC IMPORTED)
 	set_target_properties(boringcrypto PROPERTIES IMPORTED_LOCATION ${BORINGSSL_CRYPTO_LIBRARY})
   
+	set(SSL_ENABLED ON)
+	set(USE_OPENSSL ON)
+  
     list(APPEND CURL_LIBS boringssl boringcrypto)
   endif()
 
