@@ -407,6 +407,7 @@ if(CMAKE_USE_OPENSSL)
 	set(USE_OPENSSL ON)
   
     list(APPEND CURL_LIBS boringssl boringcrypto)
+	include_directories(${BORINGSSL_INCLUDE_DIR})
   endif()
 
   set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
