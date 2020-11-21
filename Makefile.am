@@ -9,7 +9,7 @@
 #
 # This software is licensed as described in the file COPYING, which
 # you should have received as part of this distribution. The terms
-# are also available at https://curl.haxx.se/docs/copyright.html.
+# are also available at https://curl.se/docs/copyright.html.
 #
 # You may opt to use, copy, modify, merge, publish, distribute and/or sell
 # copies of the Software, and permit persons to whom the Software is
@@ -197,6 +197,7 @@ bin_SCRIPTS = curl-config
 SUBDIRS = lib src
 DIST_SUBDIRS = $(SUBDIRS) tests packages scripts include docs
 
+pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libcurl.pc
 
 # List of files required to generate VC IDE .dsp, .vcproj and .vcxproj files
