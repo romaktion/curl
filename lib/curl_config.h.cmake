@@ -473,6 +473,9 @@
 /* Define to 1 if you have the <netinet/tcp.h> header file. */
 #cmakedefine HAVE_NETINET_TCP_H 1
 
+/* Define to 1 if you have the <linux/tcp.h> header file. */
+#cmakedefine HAVE_LINUX_TCP_H 1
+
 /* Define to 1 if you have the <net/if.h> header file. */
 #cmakedefine HAVE_NET_IF_H 1
 
@@ -998,6 +1001,10 @@ ${SIZEOF_TIME_T_CODE}
 
 /* if OpenSSL is in use */
 #cmakedefine USE_OPENSSL 1
+
+/* Define to 1 if you don't want the OpenSSL configuration to be loaded
+   automatically */
+#cmakedefine CURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG 1
 
 /* to enable NGHTTP2  */
 #cmakedefine USE_NGHTTP2 1

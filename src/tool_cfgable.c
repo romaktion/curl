@@ -44,6 +44,7 @@ void config_init(struct OperationConfig *config)
   config->tcp_nodelay = TRUE; /* enabled by default */
   config->happy_eyeballs_timeout_ms = CURL_HET_DEFAULT;
   config->http09_allowed = FALSE;
+  config->ftp_skip_ip = TRUE;
 }
 
 static void free_config_fields(struct OperationConfig *config)
@@ -167,6 +168,8 @@ static void free_config_fields(struct OperationConfig *config)
 
   Curl_safefree(config->ftp_account);
   Curl_safefree(config->ftp_alternative_to_user);
+
+  Curl_safefree(config->aws_sigv4_provider);
 }
 
 void config_free(struct OperationConfig *config)
