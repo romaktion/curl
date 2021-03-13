@@ -593,9 +593,6 @@ void Curl_ssl_close_all(struct Curl_easy *data)
   Curl_ssl->close_all(data);
 }
 
-#if defined(USE_OPENSSL) || defined(USE_GNUTLS) || defined(USE_SCHANNEL) || \
-  defined(USE_SECTRANSP) || defined(USE_NSS) || \
-  defined(USE_MBEDTLS) || defined(USE_WOLFSSL) || defined(USE_BEARSSL)
 int Curl_ssl_getsock(struct connectdata *conn, curl_socket_t *socks)
 {
   struct ssl_connect_data *connssl = &conn->ssl[FIRSTSOCKET];
@@ -613,16 +610,6 @@ int Curl_ssl_getsock(struct connectdata *conn, curl_socket_t *socks)
 
   return GETSOCK_BLANK;
 }
-#else
-int Curl_ssl_getsock(struct connectdata *conn,
-                     curl_socket_t *socks)
-{
-  (void)conn;
-  (void)socks;
-  return GETSOCK_BLANK;
-}
-/* USE_OPENSSL || USE_GNUTLS || USE_SCHANNEL || USE_SECTRANSP || USE_NSS */
-#endif
 
 void Curl_ssl_close(struct Curl_easy *data, struct connectdata *conn,
                     int sockindex)
@@ -1036,16 +1023,6 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
   return result;
 }
 
-#ifndef CURL_DISABLE_CRYPTO_AUTH
-CURLcode Curl_ssl_md5sum(unsigned char *tmp, /* input */
-                         size_t tmplen,
-                         unsigned char *md5sum, /* output */
-                         size_t md5len)
-{
-  return Curl_ssl->md5sum(tmp, tmplen, md5sum, md5len);
-}
-#endif
-
 /*
  * Check whether the SSL backend supports the status_request extension.
  */
@@ -1156,35 +1133,6 @@ bool Curl_none_false_start(void)
   return FALSE;
 }
 
-#ifndef CURL_DISABLE_CRYPTO_AUTH
-CURLcode Curl_none_md5sum(unsigned char *input, size_t inputlen,
-                          unsigned char *md5sum, size_t md5len UNUSED_PARAM)
-{
-  struct MD5_context *MD5pw;
-
-  (void)md5len;
-
-  MD5pw = Curl_MD5_init(Curl_DIGEST_MD5);
-  if(!MD5pw)
-    return CURLE_OUT_OF_MEMORY;
-  Curl_MD5_update(MD5pw, input, curlx_uztoui(inputlen));
-  Curl_MD5_final(MD5pw, md5sum);
-  return CURLE_OK;
-}
-#else
-CURLcode Curl_none_md5sum(unsigned char *input UNUSED_PARAM,
-                          size_t inputlen UNUSED_PARAM,
-                          unsigned char *md5sum UNUSED_PARAM,
-                          size_t md5len UNUSED_PARAM)
-{
-  (void)input;
-  (void)inputlen;
-  (void)md5sum;
-  (void)md5len;
-  return CURLE_NOT_BUILT_IN;
-}
-#endif
-
 static int multissl_init(void)
 {
   if(multissl_setup(NULL))
@@ -1207,6 +1155,13 @@ static CURLcode multissl_connect_nonblocking(struct Curl_easy *data,
   if(multissl_setup(NULL))
     return CURLE_FAILED_INIT;
   return Curl_ssl->connect_nonblocking(data, conn, sockindex, done);
+}
+
+static int multissl_getsock(struct connectdata *conn, curl_socket_t *socks)
+{
+  if(multissl_setup(NULL))
+    return 0;
+  return Curl_ssl->getsock(conn, socks);
 }
 
 static void *multissl_get_internals(struct ssl_connect_data *connssl,
@@ -1240,6 +1195,7 @@ static const struct Curl_ssl Curl_ssl_multi = {
   Curl_none_cert_status_request,     /* cert_status_request */
   multissl_connect,                  /* connect */
   multissl_connect_nonblocking,      /* connect_nonblocking */
+  multissl_getsock,                  /* getsock */
   multissl_get_internals,            /* get_internals */
   multissl_close,                    /* close_one */
   Curl_none_close_all,               /* close_all */
@@ -1248,7 +1204,6 @@ static const struct Curl_ssl Curl_ssl_multi = {
   Curl_none_set_engine_default,      /* set_engine_default */
   Curl_none_engines_list,            /* engines_list */
   Curl_none_false_start,             /* false_start */
-  Curl_none_md5sum,                  /* md5sum */
   NULL                               /* sha256sum */
 };
 
@@ -1267,6 +1222,8 @@ const struct Curl_ssl *Curl_ssl =
   &Curl_ssl_mbedtls;
 #elif defined(USE_NSS)
   &Curl_ssl_nss;
+#elif defined(USE_RUSTLS)
+  &Curl_ssl_rustls;
 #elif defined(USE_OPENSSL)
   &Curl_ssl_openssl;
 #elif defined(USE_SCHANNEL)
@@ -1309,6 +1266,9 @@ static const struct Curl_ssl *available_backends[] = {
 #endif
 #if defined(USE_BEARSSL)
   &Curl_ssl_bearssl,
+#endif
+#if defined(USE_RUSTLS)
+  &Curl_ssl_rustls,
 #endif
   NULL
 };

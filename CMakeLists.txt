@@ -5,7 +5,7 @@
 #                            | (__| |_| |  _ <| |___
 #                             \___|\___/|_| \_\_____|
 #
-# Copyright (C) 1998 - 2020, Daniel Stenberg, <daniel@haxx.se>, et al.
+# Copyright (C) 1998 - 2021, Daniel Stenberg, <daniel@haxx.se>, et al.
 #
 # This software is licensed as described in the file COPYING, which
 # you should have received as part of this distribution. The terms
@@ -1018,8 +1018,6 @@ check_symbol_exists(gettimeofday  "${CURL_INCLUDES}" HAVE_GETTIMEOFDAY)
 check_symbol_exists(inet_addr     "${CURL_INCLUDES}" HAVE_INET_ADDR)
 check_symbol_exists(inet_ntoa     "${CURL_INCLUDES}" HAVE_INET_NTOA)
 check_symbol_exists(inet_ntoa_r   "${CURL_INCLUDES}" HAVE_INET_NTOA_R)
-check_symbol_exists(tcsetattr     "${CURL_INCLUDES}" HAVE_TCSETATTR)
-check_symbol_exists(tcgetattr     "${CURL_INCLUDES}" HAVE_TCGETATTR)
 check_symbol_exists(perror        "${CURL_INCLUDES}" HAVE_PERROR)
 check_symbol_exists(closesocket   "${CURL_INCLUDES}" HAVE_CLOSESOCKET)
 check_symbol_exists(setvbuf       "${CURL_INCLUDES}" HAVE_SETVBUF)
@@ -1375,7 +1373,7 @@ _add_if("brotli"        HAVE_BROTLI)
 _add_if("zstd"          HAVE_ZSTD)
 _add_if("AsynchDNS"     USE_ARES OR USE_THREADS_POSIX OR USE_THREADS_WIN32)
 _add_if("IDN"           HAVE_LIBIDN2)
-_add_if("Largefile"     (CURL_SIZEOF_CURL_OFF_T GREATER 4) AND
+_add_if("Largefile"     (SIZEOF_CURL_OFF_T GREATER 4) AND
                         ((SIZEOF_OFF_T GREATER 4) OR USE_WIN32_LARGE_FILES))
 # TODO SSP1 (Schannel) check is missing
 _add_if("SSPI"          USE_WINDOWS_SSPI)

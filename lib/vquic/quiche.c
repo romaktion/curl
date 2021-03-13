@@ -179,6 +179,8 @@ CURLcode Curl_quic_connect(struct Curl_easy *data,
   CURLcode result;
   struct quicsocket *qs = &conn->hequic[sockindex];
   char *keylog_file = NULL;
+  char ipbuf[40];
+  int port;
 
 #ifdef DEBUG_QUICHE
   /* initialize debug log callback only once */
@@ -247,16 +249,18 @@ CURLcode Curl_quic_connect(struct Curl_easy *data,
   if(result)
     return result;
 
-  /* store the used address as a string */
-  if(!Curl_addr2string((struct sockaddr*)addr, addrlen,
-                       conn->primary_ip, &conn->primary_port)) {
+  /* extract the used address as a string */
+  if(!Curl_addr2string((struct sockaddr*)addr, addrlen, ipbuf, &port)) {
     char buffer[STRERROR_LEN];
     failf(data, "ssrem inet_ntop() failed with errno %d: %s",
           SOCKERRNO, Curl_strerror(SOCKERRNO, buffer, sizeof(buffer)));
     return CURLE_BAD_FUNCTION_ARGUMENT;
   }
-  memcpy(conn->ip_addr_str, conn->primary_ip, MAX_IPADR_LEN);
-  Curl_persistconninfo(data, conn);
+
+  infof(data, "Connect socket %d over QUIC to %s:%ld\n",
+        sockfd, ipbuf, port);
+
+  Curl_persistconninfo(data, conn, NULL, -1);
 
   /* for connection reuse purposes: */
   conn->ssl[FIRSTSOCKET].state = ssl_connection_complete;
@@ -355,6 +359,8 @@ static CURLcode process_ingress(struct Curl_easy *data, int sockfd,
   ssize_t recvd;
   uint8_t *buf = (uint8_t *)data->state.buffer;
   size_t bufsize = data->set.buffer_size;
+
+  DEBUGASSERT(qs->conn);
 
   /* in case the timeout expired */
   quiche_conn_on_timeout(qs->conn);

@@ -170,20 +170,22 @@ static void quic_settings(struct quicsocket *qs,
                           uint64_t stream_buffer_size)
 {
   ngtcp2_settings *s = &qs->settings;
+  ngtcp2_transport_params *t = &qs->transport_params;
   ngtcp2_settings_default(s);
+  ngtcp2_transport_params_default(t);
 #ifdef DEBUG_NGTCP2
   s->log_printf = quic_printf;
 #else
   s->log_printf = NULL;
 #endif
   s->initial_ts = timestamp();
-  s->transport_params.initial_max_stream_data_bidi_local = stream_buffer_size;
-  s->transport_params.initial_max_stream_data_bidi_remote = QUIC_MAX_STREAMS;
-  s->transport_params.initial_max_stream_data_uni = QUIC_MAX_STREAMS;
-  s->transport_params.initial_max_data = QUIC_MAX_DATA;
-  s->transport_params.initial_max_streams_bidi = 1;
-  s->transport_params.initial_max_streams_uni = 3;
-  s->transport_params.max_idle_timeout = QUIC_IDLE_TIMEOUT;
+  t->initial_max_stream_data_bidi_local = stream_buffer_size;
+  t->initial_max_stream_data_bidi_remote = QUIC_MAX_STREAMS;
+  t->initial_max_stream_data_uni = QUIC_MAX_STREAMS;
+  t->initial_max_data = QUIC_MAX_DATA;
+  t->initial_max_streams_bidi = 1;
+  t->initial_max_streams_uni = 3;
+  t->max_idle_timeout = QUIC_IDLE_TIMEOUT;
   if(qs->qlogfd != -1) {
     s->qlog.write = qlog_callback;
   }
@@ -578,7 +580,7 @@ static int cb_recv_stream_data(ngtcp2_conn *tconn, uint32_t flags,
 {
   struct quicsocket *qs = (struct quicsocket *)user_data;
   ssize_t nconsumed;
-  int fin = flags & NGTCP2_STREAM_DATA_FLAG_FIN ? 1 : 0;
+  int fin = (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0;
   (void)offset;
   (void)stream_user_data;
 
@@ -737,7 +739,8 @@ static ngtcp2_callbacks ng_callbacks = {
   NULL, /* handshake_confirmed */
   NULL, /* recv_new_token */
   ngtcp2_crypto_delete_crypto_aead_ctx_cb,
-  ngtcp2_crypto_delete_crypto_cipher_ctx_cb
+  ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
+  NULL /* recv_datagram */
 };
 
 /*
@@ -756,7 +759,7 @@ CURLcode Curl_quic_connect(struct Curl_easy *data,
   ngtcp2_path path; /* TODO: this must be initialized properly */
   struct quicsocket *qs = &conn->hequic[sockindex];
   char ipbuf[40];
-  long port;
+  int port;
   int qfd;
 
   if(qs->conn)
@@ -771,7 +774,7 @@ CURLcode Curl_quic_connect(struct Curl_easy *data,
     return CURLE_BAD_FUNCTION_ARGUMENT;
   }
 
-  infof(data, "Connect socket %d over QUIC to %s:%ld\n",
+  infof(data, "Connect socket %d over QUIC to %s:%d\n",
         sockfd, ipbuf, port);
 
   qs->version = NGTCP2_PROTO_VER_MAX;
@@ -805,12 +808,12 @@ CURLcode Curl_quic_connect(struct Curl_easy *data,
     return CURLE_QUIC_CONNECT_ERROR;
 
   ngtcp2_addr_init(&path.local, (struct sockaddr *)&qs->local_addr,
-                   qs->local_addrlen, NULL);
-  ngtcp2_addr_init(&path.remote, addr, addrlen, NULL);
+                   qs->local_addrlen);
+  ngtcp2_addr_init(&path.remote, addr, addrlen);
 
   rc = ngtcp2_conn_client_new(&qs->qconn, &qs->dcid, &qs->scid, &path,
                               NGTCP2_PROTO_VER_MIN, &ng_callbacks,
-                              &qs->settings, NULL, qs);
+                              &qs->settings, &qs->transport_params, NULL, qs);
   if(rc)
     return CURLE_QUIC_CONNECT_ERROR;
 
@@ -1289,8 +1292,6 @@ static int cb_h3_acked_stream_data(nghttp3_conn *conn, int64_t stream_id,
 {
   struct Curl_easy *data = stream_user_data;
   struct HTTP *stream = data->req.p.http;
-  (void)conn;
-  (void)stream_id;
   (void)user_data;
 
   if(!data->set.postfields) {
@@ -1299,6 +1300,13 @@ static int cb_h3_acked_stream_data(nghttp3_conn *conn, int64_t stream_id,
                  "cb_h3_acked_stream_data, %zd bytes, %zd left unacked\n",
                  datalen, stream->h3out->used));
     DEBUGASSERT(stream->h3out->used < H3_SEND_SIZE);
+
+    if(stream->h3out->used == 0) {
+      int rv = nghttp3_conn_resume_stream(conn, stream_id);
+      if(rv != 0) {
+        return NGTCP2_ERR_CALLBACK_FAILURE;
+      }
+    }
   }
   return 0;
 }
@@ -1334,12 +1342,13 @@ static ssize_t cb_h3_readfunction(nghttp3_conn *conn, int64_t stream_id,
       nread = H3_SEND_SIZE - out->windex;
 
     memcpy(&out->buf[out->windex], stream->upload_mem, nread);
-    out->windex += nread;
-    out->used += nread;
 
     /* that's the chunk we return to nghttp3 */
     vec[0].base = &out->buf[out->windex];
     vec[0].len = nread;
+
+    out->windex += nread;
+    out->used += nread;
 
     if(out->windex == H3_SEND_SIZE)
       out->windex = 0; /* wrap */
@@ -1358,7 +1367,7 @@ static ssize_t cb_h3_readfunction(nghttp3_conn *conn, int64_t stream_id,
      (stream->upload_left <= 0)) {
     H3BUGF(infof(data, "!!!!!!!!! cb_h3_readfunction sets EOF\n"));
     *pflags = NGHTTP3_DATA_FLAG_EOF;
-    return 0;
+    return nread ? 1 : 0;
   }
   else if(!nread) {
     return NGHTTP3_ERR_WOULDBLOCK;
@@ -1721,9 +1730,9 @@ static CURLcode ng_process_ingress(struct Curl_easy *data,
     }
 
     ngtcp2_addr_init(&path.local, (struct sockaddr *)&qs->local_addr,
-                     qs->local_addrlen, NULL);
+                     qs->local_addrlen);
     ngtcp2_addr_init(&path.remote, (struct sockaddr *)&remote_addr,
-                     remote_addrlen, NULL);
+                     remote_addrlen);
 
     rv = ngtcp2_conn_read_pkt(qs->qconn, &path, &pi, buf, recvd, ts);
     if(rv != 0) {
@@ -1754,6 +1763,7 @@ static CURLcode ng_flush_egress(struct Curl_easy *data,
   int fin;
   nghttp3_vec vec[16];
   ssize_t ndatalen;
+  uint32_t flags;
 
   switch(qs->local_addr.ss_family) {
   case AF_INET:
@@ -1778,7 +1788,10 @@ static CURLcode ng_flush_egress(struct Curl_easy *data,
   ngtcp2_path_storage_zero(&ps);
 
   for(;;) {
-    outlen = -1;
+    veccnt = 0;
+    stream_id = -1;
+    fin = 0;
+
     if(qs->h3conn && ngtcp2_conn_get_max_data_left(qs->qconn)) {
       veccnt = nghttp3_conn_writev_stream(qs->h3conn, &stream_id, &fin, vec,
                                           sizeof(vec) / sizeof(vec[0]));
@@ -1787,64 +1800,52 @@ static CURLcode ng_flush_egress(struct Curl_easy *data,
               nghttp3_strerror((int)veccnt));
         return CURLE_SEND_ERROR;
       }
-      else if(veccnt > 0) {
-        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE |
-          (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0);
-        outlen =
-          ngtcp2_conn_writev_stream(qs->qconn, &ps.path, NULL,
-                                    out, pktlen, &ndatalen,
-                                    flags, stream_id,
-                                    (const ngtcp2_vec *)vec, veccnt, ts);
-        if(outlen == 0) {
-          break;
-        }
-        if(outlen < 0) {
-          if(outlen == NGTCP2_ERR_STREAM_DATA_BLOCKED ||
-             outlen == NGTCP2_ERR_STREAM_SHUT_WR) {
-            assert(ndatalen == -1);
-            rv = nghttp3_conn_block_stream(qs->h3conn, stream_id);
-            if(rv != 0) {
-              failf(data,
-                    "nghttp3_conn_block_stream returned error: %s\n",
-                    nghttp3_strerror(rv));
-              return CURLE_SEND_ERROR;
-            }
-            continue;
-          }
-          else if(outlen == NGTCP2_ERR_WRITE_MORE) {
-            assert(ndatalen > 0);
-            rv = nghttp3_conn_add_write_offset(qs->h3conn, stream_id,
-                                               ndatalen);
-            if(rv != 0) {
-              failf(data,
-                    "nghttp3_conn_add_write_offset returned error: %s\n",
-                    nghttp3_strerror(rv));
-              return CURLE_SEND_ERROR;
-            }
-            continue;
-          }
-          else {
-            assert(ndatalen == -1);
-            failf(data, "ngtcp2_conn_writev_stream returned error: %s",
-                  ngtcp2_strerror((int)outlen));
-            return CURLE_SEND_ERROR;
-          }
-        }
-        else {
-          assert(ndatalen == -1);
-        }
-      }
+    }
+
+    flags = NGTCP2_WRITE_STREAM_FLAG_MORE |
+            (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0);
+    outlen = ngtcp2_conn_writev_stream(qs->qconn, &ps.path, NULL, out, pktlen,
+                                       &ndatalen, flags, stream_id,
+                                       (const ngtcp2_vec *)vec, veccnt, ts);
+    if(outlen == 0) {
+      break;
     }
     if(outlen < 0) {
-      outlen = ngtcp2_conn_write_pkt(qs->qconn, &ps.path, NULL,
-                                     out, pktlen, ts);
-      if(outlen < 0) {
-        failf(data, "ngtcp2_conn_write_pkt returned error: %s",
+      if(outlen == NGTCP2_ERR_STREAM_DATA_BLOCKED ||
+         outlen == NGTCP2_ERR_STREAM_SHUT_WR) {
+        assert(ndatalen == -1);
+        rv = nghttp3_conn_block_stream(qs->h3conn, stream_id);
+        if(rv != 0) {
+          failf(data, "nghttp3_conn_block_stream returned error: %s\n",
+                nghttp3_strerror(rv));
+          return CURLE_SEND_ERROR;
+        }
+        continue;
+      }
+      else if(outlen == NGTCP2_ERR_WRITE_MORE) {
+        assert(ndatalen >= 0);
+        rv = nghttp3_conn_add_write_offset(qs->h3conn, stream_id, ndatalen);
+        if(rv != 0) {
+          failf(data, "nghttp3_conn_add_write_offset returned error: %s\n",
+                nghttp3_strerror(rv));
+          return CURLE_SEND_ERROR;
+        }
+        continue;
+      }
+      else {
+        assert(ndatalen == -1);
+        failf(data, "ngtcp2_conn_writev_stream returned error: %s",
               ngtcp2_strerror((int)outlen));
         return CURLE_SEND_ERROR;
       }
-      if(outlen == 0)
-        break;
+    }
+    else if(ndatalen >= 0) {
+      rv = nghttp3_conn_add_write_offset(qs->h3conn, stream_id, ndatalen);
+      if(rv != 0) {
+        failf(data, "nghttp3_conn_add_write_offset returned error: %s\n",
+              nghttp3_strerror(rv));
+        return CURLE_SEND_ERROR;
+      }
     }
 
     memcpy(&remote_addr, ps.path.remote.addr, ps.path.remote.addrlen);

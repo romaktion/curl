@@ -177,7 +177,7 @@ void Curl_printable_address(const struct Curl_addrinfo *ip,
  * use, or we'll leak memory!
  */
 struct Curl_dns_entry *
-Curl_fetch_addr(struct connectdata *conn,
+Curl_fetch_addr(struct Curl_easy *data,
                 const char *hostname,
                 int port);
 
@@ -245,4 +245,5 @@ CURLcode Curl_resolv_check(struct Curl_easy *data,
 int Curl_resolv_getsock(struct Curl_easy *data,
                         curl_socket_t *socks);
 
+CURLcode Curl_resolver_error(struct Curl_easy *data);
 #endif /* HEADER_CURL_HOSTIP_H */

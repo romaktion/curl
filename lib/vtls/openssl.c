@@ -234,6 +234,8 @@
 #endif
 
 struct ssl_backend_data {
+  struct Curl_easy *logger; /* transfer handle to pass trace logs to, only
+                               using sockindex 0 */
   /* these ones requires specific SSL-types */
   SSL_CTX* ctx;
   SSL*     handle;
@@ -1356,10 +1358,16 @@ static struct curl_slist *ossl_engines_list(struct Curl_easy *data)
   return list;
 }
 
-static void ossl_closeone(struct ssl_connect_data *connssl)
+#define set_logger(conn, data)                  \
+  conn->ssl[0].backend->logger = data
+
+static void ossl_closeone(struct Curl_easy *data,
+                          struct connectdata *conn,
+                          struct ssl_connect_data *connssl)
 {
   struct ssl_backend_data *backend = connssl->backend;
   if(backend->handle) {
+    set_logger(conn, data);
     (void)SSL_shutdown(backend->handle);
     SSL_set_connect_state(backend->handle);
 
@@ -1378,10 +1386,9 @@ static void ossl_closeone(struct ssl_connect_data *connssl)
 static void ossl_close(struct Curl_easy *data, struct connectdata *conn,
                        int sockindex)
 {
-  (void) data;
-  ossl_closeone(&conn->ssl[sockindex]);
+  ossl_closeone(data, conn, &conn->ssl[sockindex]);
 #ifndef CURL_DISABLE_PROXY
-  ossl_closeone(&conn->proxy_ssl[sockindex]);
+  ossl_closeone(data, conn, &conn->proxy_ssl[sockindex]);
 #endif
 }
 
@@ -2055,24 +2062,23 @@ static const char *tls_rt_type(int type)
   }
 }
 
-
 /*
  * Our callback from the SSL/TLS layers.
  */
-static void ssl_tls_trace(int direction, int ssl_ver, int content_type,
-                          const void *buf, size_t len, SSL *ssl,
-                          void *userp)
+static void ossl_trace(int direction, int ssl_ver, int content_type,
+                       const void *buf, size_t len, SSL *ssl,
+                       void *userp)
 {
-  struct Curl_easy *data;
   char unknown[32];
   const char *verstr = NULL;
   struct connectdata *conn = userp;
+  struct ssl_connect_data *connssl = &conn->ssl[0];
+  struct ssl_backend_data *backend = connssl->backend;
+  struct Curl_easy *data = backend->logger;
 
-  if(!conn || !conn->data || !conn->data->set.fdebug ||
+  if(!conn || !data || !data->set.fdebug ||
      (direction != 0 && direction != 1))
     return;
-
-  data = conn->data;
 
   switch(ssl_ver) {
 #ifdef SSL2_VERSION /* removed in recent versions */
@@ -2222,7 +2228,7 @@ select_next_proto_cb(SSL *ssl,
   (void)ssl;
 
 #ifdef USE_NGHTTP2
-  if(data->set.httpversion >= CURL_HTTP_VERSION_2 &&
+  if(data->state.httpwant >= CURL_HTTP_VERSION_2 &&
      !select_next_protocol(out, outlen, in, inlen, NGHTTP2_PROTO_VERSION_ID,
                            NGHTTP2_PROTO_VERSION_ID_LEN)) {
     infof(data, "NPN, negotiated HTTP2 (%s)\n",
@@ -2247,35 +2253,6 @@ select_next_proto_cb(SSL *ssl,
   return SSL_TLSEXT_ERR_OK;
 }
 #endif /* HAS_NPN */
-
-#ifndef CURL_DISABLE_VERBOSE_STRINGS
-static const char *
-get_ssl_version_txt(SSL *ssl)
-{
-  if(!ssl)
-    return "";
-
-  switch(SSL_version(ssl)) {
-#ifdef TLS1_3_VERSION
-  case TLS1_3_VERSION:
-    return "TLSv1.3";
-#endif
-#if OPENSSL_VERSION_NUMBER >= 0x1000100FL
-  case TLS1_2_VERSION:
-    return "TLSv1.2";
-  case TLS1_1_VERSION:
-    return "TLSv1.1";
-#endif
-  case TLS1_VERSION:
-    return "TLSv1.0";
-  case SSL3_VERSION:
-    return "SSLv3";
-  case SSL2_VERSION:
-    return "SSLv2";
-  }
-  return "unknown";
-}
-#endif
 
 #if (OPENSSL_VERSION_NUMBER >= 0x10100000L) /* 1.1.0 */
 static CURLcode
@@ -2609,7 +2586,7 @@ static CURLcode ossl_connect_step1(struct Curl_easy *data,
 #ifdef SSL_CTRL_SET_MSG_CALLBACK
   if(data->set.fdebug && data->set.verbose) {
     /* the SSL trace callback is only used for verbose logging */
-    SSL_CTX_set_msg_callback(backend->ctx, ssl_tls_trace);
+    SSL_CTX_set_msg_callback(backend->ctx, ossl_trace);
     SSL_CTX_set_msg_callback_arg(backend->ctx, conn);
   }
 #endif
@@ -2749,7 +2726,7 @@ static CURLcode ossl_connect_step1(struct Curl_easy *data,
     unsigned char protocols[128];
 
 #ifdef USE_NGHTTP2
-    if(data->set.httpversion >= CURL_HTTP_VERSION_2
+    if(data->state.httpwant >= CURL_HTTP_VERSION_2
 #ifndef CURL_DISABLE_PROXY
        && (!SSL_IS_PROXY() || !conn->bits.tunnel_proxy)
 #endif
@@ -3189,10 +3166,21 @@ static CURLcode ossl_connect_step1(struct Curl_easy *data,
 #ifdef ENABLE_IPV6
      (0 == Curl_inet_pton(AF_INET6, hostname, &addr)) &&
 #endif
-     sni &&
-     !SSL_set_tlsext_host_name(backend->handle, hostname))
-    infof(data, "WARNING: failed to configure server name indication (SNI) "
-          "TLS extension\n");
+     sni) {
+    size_t nlen = strlen(hostname);
+    if((long)nlen >= data->set.buffer_size)
+      /* this is seriously messed up */
+      return CURLE_SSL_CONNECT_ERROR;
+
+    /* RFC 6066 section 3 says the SNI field is case insensitive, but browsers
+       send the data lowercase and subsequently there are now numerous servers
+       out there that don't work unless the name is lowercased */
+    Curl_strntolower(data->state.buffer, hostname, nlen);
+    data->state.buffer[nlen] = 0;
+    if(!SSL_set_tlsext_host_name(backend->handle, data->state.buffer))
+      infof(data, "WARNING: failed to configure server name indication (SNI) "
+            "TLS extension\n");
+  }
 #endif
 
   /* Check if there's a cached ID we can/should use here! */
@@ -3369,7 +3357,7 @@ static CURLcode ossl_connect_step2(struct Curl_easy *data,
 
     /* Informational message */
     infof(data, "SSL connection using %s / %s\n",
-          get_ssl_version_txt(backend->handle),
+          SSL_get_version(backend->handle),
           SSL_get_cipher(backend->handle));
 
 #ifdef HAS_ALPN
@@ -3504,6 +3492,12 @@ typedef size_t numcert_t;
 typedef int numcert_t;
 #endif
 
+#if defined(OPENSSL_VERSION_MAJOR) && (OPENSSL_VERSION_MAJOR >= 3)
+#define OSSL3_CONST const
+#else
+#define OSSL3_CONST
+#endif
+
 static CURLcode get_cert_chain(struct Curl_easy *data,
                                struct ssl_connect_data *connssl)
 {
@@ -3611,7 +3605,7 @@ static CURLcode get_cert_chain(struct Curl_easy *data,
       switch(pktype) {
       case EVP_PKEY_RSA:
       {
-        RSA *rsa;
+        OSSL3_CONST RSA *rsa;
 #ifdef HAVE_OPAQUE_EVP_PKEY
         rsa = EVP_PKEY_get0_RSA(pubkey);
 #else
@@ -3641,7 +3635,7 @@ static CURLcode get_cert_chain(struct Curl_easy *data,
       case EVP_PKEY_DSA:
       {
 #ifndef OPENSSL_NO_DSA
-        DSA *dsa;
+        OSSL3_CONST DSA *dsa;
 #ifdef HAVE_OPAQUE_EVP_PKEY
         dsa = EVP_PKEY_get0_DSA(pubkey);
 #else
@@ -3673,7 +3667,7 @@ static CURLcode get_cert_chain(struct Curl_easy *data,
       }
       case EVP_PKEY_DH:
       {
-        DH *dh;
+        OSSL3_CONST DH *dh;
 #ifdef HAVE_OPAQUE_EVP_PKEY
         dh = EVP_PKEY_get0_DH(pubkey);
 #else
@@ -3954,7 +3948,7 @@ static CURLcode servercert(struct Curl_easy *data,
     result = CURLE_OK;
 
   ptr = SSL_IS_PROXY() ? data->set.str[STRING_SSL_PINNEDPUBLICKEY_PROXY] :
-                         data->set.str[STRING_SSL_PINNEDPUBLICKEY_ORIG];
+    data->set.str[STRING_SSL_PINNEDPUBLICKEY];
   if(!result && ptr) {
     result = pkp_pin_peer_pubkey(data, backend->server_cert, ptr);
     if(result)
@@ -4165,6 +4159,7 @@ static ssize_t ossl_send(struct Curl_easy *data,
   ERR_clear_error();
 
   memlen = (len > (size_t)INT_MAX) ? INT_MAX : (int)len;
+  set_logger(conn, data);
   rc = SSL_write(backend->handle, mem, memlen);
 
   if(rc <= 0) {
@@ -4243,6 +4238,7 @@ static ssize_t ossl_recv(struct Curl_easy *data,   /* transfer */
   ERR_clear_error();
 
   buffsize = (buffersize > (size_t)INT_MAX) ? INT_MAX : (int)buffersize;
+  set_logger(conn, data);
   nread = (ssize_t)SSL_read(backend->handle, buf, buffsize);
   if(nread <= 0) {
     /* failed SSL_read */
@@ -4402,25 +4398,6 @@ static CURLcode ossl_random(struct Curl_easy *data,
   return (rc == 1 ? CURLE_OK : CURLE_FAILED_INIT);
 }
 
-static CURLcode ossl_md5sum(unsigned char *tmp, /* input */
-                            size_t tmplen,
-                            unsigned char *md5sum /* output */,
-                            size_t unused)
-{
-  EVP_MD_CTX *mdctx;
-  unsigned int len = 0;
-  (void) unused;
-
-  mdctx = EVP_MD_CTX_create();
-  if(!mdctx)
-    return CURLE_OUT_OF_MEMORY;
-  EVP_DigestInit(mdctx, EVP_md5());
-  EVP_DigestUpdate(mdctx, tmp, tmplen);
-  EVP_DigestFinal_ex(mdctx, md5sum, &len);
-  EVP_MD_CTX_destroy(mdctx);
-  return CURLE_OK;
-}
-
 #if (OPENSSL_VERSION_NUMBER >= 0x0090800fL) && !defined(OPENSSL_NO_SHA256)
 static CURLcode ossl_sha256sum(const unsigned char *tmp, /* input */
                                size_t tmplen,
@@ -4485,6 +4462,7 @@ const struct Curl_ssl Curl_ssl_openssl = {
   ossl_cert_status_request, /* cert_status_request */
   ossl_connect,             /* connect */
   ossl_connect_nonblocking, /* connect_nonblocking */
+  Curl_ssl_getsock,         /* getsock */
   ossl_get_internals,       /* get_internals */
   ossl_close,               /* close_one */
   ossl_close_all,           /* close_all */
@@ -4493,7 +4471,6 @@ const struct Curl_ssl Curl_ssl_openssl = {
   ossl_set_engine_default,  /* set_engine_default */
   ossl_engines_list,        /* engines_list */
   Curl_none_false_start,    /* false_start */
-  ossl_md5sum,              /* md5sum */
 #if (OPENSSL_VERSION_NUMBER >= 0x0090800fL) && !defined(OPENSSL_NO_SHA256)
   ossl_sha256sum            /* sha256sum */
 #else

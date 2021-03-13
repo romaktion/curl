@@ -35,14 +35,8 @@
 #include <gnutls/abstract.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
-
-#ifdef USE_GNUTLS_NETTLE
 #include <gnutls/crypto.h>
-#include <nettle/md5.h>
 #include <nettle/sha2.h>
-#else
-#include <gcrypt.h>
-#endif
 
 #include "urldata.h"
 #include "sendf.h"
@@ -618,7 +612,7 @@ gtls_connect_step1(struct Curl_easy *data,
     gnutls_datum_t protocols[2];
 
 #ifdef USE_NGHTTP2
-    if(data->set.httpversion >= CURL_HTTP_VERSION_2
+    if(data->state.httpversion >= CURL_HTTP_VERSION_2
 #ifndef CURL_DISABLE_PROXY
        && (!SSL_IS_PROXY() || !conn->bits.tunnel_proxy)
 #endif
@@ -1184,7 +1178,7 @@ gtls_connect_step3(struct Curl_easy *data,
   }
 
   ptr = SSL_IS_PROXY() ? data->set.str[STRING_SSL_PINNEDPUBLICKEY_PROXY] :
-        data->set.str[STRING_SSL_PINNEDPUBLICKEY_ORIG];
+    data->set.str[STRING_SSL_PINNEDPUBLICKEY];
   if(ptr) {
     result = pkp_pin_peer_pubkey(data, x509_cert, ptr);
     if(result != CURLE_OK) {
@@ -1583,59 +1577,14 @@ static size_t gtls_version(char *buffer, size_t size)
   return msnprintf(buffer, size, "GnuTLS/%s", gnutls_check_version(NULL));
 }
 
-#ifndef USE_GNUTLS_NETTLE
-static int gtls_seed(struct Curl_easy *data)
-{
-  /* we have the "SSL is seeded" boolean static to prevent multiple
-     time-consuming seedings in vain */
-  static bool ssl_seeded = FALSE;
-
-  /* Quickly add a bit of entropy */
-  gcry_fast_random_poll();
-
-  if(!ssl_seeded || data->set.str[STRING_SSL_RANDOM_FILE] ||
-     data->set.str[STRING_SSL_EGDSOCKET]) {
-    ssl_seeded = TRUE;
-  }
-  return 0;
-}
-#endif
-
 /* data might be NULL! */
 static CURLcode gtls_random(struct Curl_easy *data,
                             unsigned char *entropy, size_t length)
 {
-#if defined(USE_GNUTLS_NETTLE)
   int rc;
   (void)data;
   rc = gnutls_rnd(GNUTLS_RND_RANDOM, entropy, length);
   return rc?CURLE_FAILED_INIT:CURLE_OK;
-#elif defined(USE_GNUTLS)
-  if(data)
-    gtls_seed(data); /* Initiate the seed if not already done */
-  gcry_randomize(entropy, length, GCRY_STRONG_RANDOM);
-#endif
-  return CURLE_OK;
-}
-
-static CURLcode gtls_md5sum(unsigned char *tmp, /* input */
-                            size_t tmplen,
-                            unsigned char *md5sum, /* output */
-                            size_t md5len)
-{
-#if defined(USE_GNUTLS_NETTLE)
-  struct md5_ctx MD5pw;
-  md5_init(&MD5pw);
-  md5_update(&MD5pw, (unsigned int)tmplen, tmp);
-  md5_digest(&MD5pw, (unsigned int)md5len, md5sum);
-#elif defined(USE_GNUTLS)
-  gcry_md_hd_t MD5pw;
-  gcry_md_open(&MD5pw, GCRY_MD_MD5, 0);
-  gcry_md_write(MD5pw, tmp, tmplen);
-  memcpy(md5sum, gcry_md_read(MD5pw, 0), md5len);
-  gcry_md_close(MD5pw);
-#endif
-  return CURLE_OK;
 }
 
 static CURLcode gtls_sha256sum(const unsigned char *tmp, /* input */
@@ -1643,18 +1592,10 @@ static CURLcode gtls_sha256sum(const unsigned char *tmp, /* input */
                                unsigned char *sha256sum, /* output */
                                size_t sha256len)
 {
-#if defined(USE_GNUTLS_NETTLE)
   struct sha256_ctx SHA256pw;
   sha256_init(&SHA256pw);
   sha256_update(&SHA256pw, (unsigned int)tmplen, tmp);
   sha256_digest(&SHA256pw, (unsigned int)sha256len, sha256sum);
-#elif defined(USE_GNUTLS)
-  gcry_md_hd_t SHA256pw;
-  gcry_md_open(&SHA256pw, GCRY_MD_SHA256, 0);
-  gcry_md_write(SHA256pw, tmp, tmplen);
-  memcpy(sha256sum, gcry_md_read(SHA256pw, 0), sha256len);
-  gcry_md_close(SHA256pw);
-#endif
   return CURLE_OK;
 }
 
@@ -1691,6 +1632,7 @@ const struct Curl_ssl Curl_ssl_gnutls = {
   gtls_cert_status_request,      /* cert_status_request */
   gtls_connect,                  /* connect */
   gtls_connect_nonblocking,      /* connect_nonblocking */
+  Curl_ssl_getsock,              /* getsock */
   gtls_get_internals,            /* get_internals */
   gtls_close,                    /* close_one */
   Curl_none_close_all,           /* close_all */
@@ -1699,7 +1641,6 @@ const struct Curl_ssl Curl_ssl_gnutls = {
   Curl_none_set_engine_default,  /* set_engine_default */
   Curl_none_engines_list,        /* engines_list */
   Curl_none_false_start,         /* false_start */
-  gtls_md5sum,                   /* md5sum */
   gtls_sha256sum                 /* sha256sum */
 };
 

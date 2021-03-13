@@ -542,7 +542,6 @@ static CURLcode nss_load_cert(struct ssl_connect_data *ssl,
 
   if(!result && !cacert) {
     /* we have successfully loaded a client certificate */
-    CERTCertificate *cert;
     char *nickname = NULL;
     char *n = strrchr(filename, '/');
     if(n)
@@ -554,7 +553,7 @@ static CURLcode nss_load_cert(struct ssl_connect_data *ssl,
      * <https://bugzilla.redhat.com/733685>. */
     nickname = aprintf("PEM Token #1:%s", n);
     if(nickname) {
-      cert = PK11_FindCertFromNickname(nickname, NULL);
+      CERTCertificate *cert = PK11_FindCertFromNickname(nickname, NULL);
       if(cert)
         CERT_DestroyCertificate(cert);
 
@@ -957,7 +956,6 @@ static CURLcode display_conn_info(struct Curl_easy *data, PRFileDesc *sock)
   CERTCertificate *cert2;
   CERTCertificate *cert3;
   PRTime now;
-  int i;
 
   if(SSL_GetChannelInfo(sock, &channel, sizeof(channel)) ==
      SECSuccess && channel.length == sizeof(channel) &&
@@ -978,8 +976,8 @@ static CURLcode display_conn_info(struct Curl_easy *data, PRFileDesc *sock)
     }
     else {
       /* Count certificates in chain. */
+      int i = 1;
       now = PR_Now();
-      i = 1;
       if(!cert->isRoot) {
         cert2 = CERT_FindCertIssuer(cert, now, certUsageSSLCA);
         while(cert2) {
@@ -1782,12 +1780,11 @@ static CURLcode nss_fail_connect(struct ssl_connect_data *connssl,
                                  struct Curl_easy *data,
                                  CURLcode curlerr)
 {
-  PRErrorCode err = 0;
   struct ssl_backend_data *backend = connssl->backend;
 
   if(is_nss_error(curlerr)) {
     /* read NSPR error code */
-    err = PR_GetError();
+    PRErrorCode err = PR_GetError();
     if(is_cc_error(err))
       curlerr = CURLE_SSL_CERTPROBLEM;
 
@@ -2083,7 +2080,7 @@ static CURLcode nss_setup_connect(struct Curl_easy *data,
     unsigned char protocols[128];
 
 #ifdef USE_NGHTTP2
-    if(data->set.httpversion >= CURL_HTTP_VERSION_2
+    if(data->state.httpversion >= CURL_HTTP_VERSION_2
 #ifndef CURL_DISABLE_PROXY
       && (!SSL_IS_PROXY() || !conn->bits.tunnel_proxy)
 #endif
@@ -2370,24 +2367,6 @@ static CURLcode nss_random(struct Curl_easy *data,
   return CURLE_OK;
 }
 
-static CURLcode nss_md5sum(unsigned char *tmp, /* input */
-                           size_t tmplen,
-                           unsigned char *md5sum, /* output */
-                           size_t md5len)
-{
-  PK11Context *MD5pw = PK11_CreateDigestContext(SEC_OID_MD5);
-  unsigned int MD5out;
-
-  if(!MD5pw)
-    return CURLE_NOT_BUILT_IN;
-
-  PK11_DigestOp(MD5pw, tmp, curlx_uztoui(tmplen));
-  PK11_DigestFinal(MD5pw, md5sum, &MD5out, curlx_uztoui(md5len));
-  PK11_DestroyContext(MD5pw, PR_TRUE);
-
-  return CURLE_OK;
-}
-
 static CURLcode nss_sha256sum(const unsigned char *tmp, /* input */
                               size_t tmplen,
                               unsigned char *sha256sum, /* output */
@@ -2453,6 +2432,7 @@ const struct Curl_ssl Curl_ssl_nss = {
   nss_cert_status_request,      /* cert_status_request */
   nss_connect,                  /* connect */
   nss_connect_nonblocking,      /* connect_nonblocking */
+  Curl_ssl_getsock,             /* getsock */
   nss_get_internals,            /* get_internals */
   nss_close,                    /* close_one */
   Curl_none_close_all,          /* close_all */
@@ -2462,7 +2442,6 @@ const struct Curl_ssl Curl_ssl_nss = {
   Curl_none_set_engine_default, /* set_engine_default */
   Curl_none_engines_list,       /* engines_list */
   nss_false_start,              /* false_start */
-  nss_md5sum,                   /* md5sum */
   nss_sha256sum                 /* sha256sum */
 };
 

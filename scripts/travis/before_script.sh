@@ -43,7 +43,7 @@ if [ "$NGTCP2" = yes ]; then
     make install
   else
     cd $HOME
-    git clone --depth 1 -b OpenSSL_1_1_1g-quic-draft-29 https://github.com/tatsuhiro-t/openssl possl
+    git clone --depth 1 -b OpenSSL_1_1_1j+quic https://github.com/quictls/openssl possl
     cd possl
     ./config enable-tls1_3 --prefix=$HOME/ngbuild
     make
@@ -121,7 +121,7 @@ if [ "$TRAVIS_OS_NAME" = linux -a "$QUICHE" ]; then
   curl https://sh.rustup.rs -sSf | sh -s -- -y
   source $HOME/.cargo/env
   cd $HOME/quiche
-  cargo build -v --release --features pkg-config-meta,qlog
+  cargo build -v --release --features ffi,pkg-config-meta,qlog
   mkdir -v deps/boringssl/src/lib
   ln -vnf $(find target/release -name libcrypto.a -o -name libssl.a) deps/boringssl/src/lib/
 fi

@@ -571,12 +571,12 @@ static CURLcode pop3_perform_command(struct Curl_easy *data)
   const char *command = NULL;
 
   /* Calculate the default command */
-  if(pop3->id[0] == '\0' || data->set.ftp_list_only) {
+  if(pop3->id[0] == '\0' || data->set.list_only) {
     command = "LIST";
 
     if(pop3->id[0] != '\0')
       /* Message specific LIST so skip the BODY transfer */
-      pop3->transfer = FTPTRANSFER_INFO;
+      pop3->transfer = PPTRANSFER_INFO;
   }
   else
     command = "RETR";
@@ -916,7 +916,7 @@ static CURLcode pop3_state_command_resp(struct Curl_easy *data,
      the strip counter here so that these bytes won't be delivered. */
   pop3c->strip = 2;
 
-  if(pop3->transfer == FTPTRANSFER_BODY) {
+  if(pop3->transfer == PPTRANSFER_BODY) {
     /* POP3 download */
     Curl_setup_transfer(data, FIRSTSOCKET, -1, FALSE, -1);
 
@@ -1072,8 +1072,7 @@ static CURLcode pop3_init(struct Curl_easy *data)
 static int pop3_getsock(struct Curl_easy *data,
                         struct connectdata *conn, curl_socket_t *socks)
 {
-  (void)data;
-  return Curl_pp_getsock(&conn->proto.pop3c.pp, socks);
+  return Curl_pp_getsock(data, &conn->proto.pop3c.pp, socks);
 }
 
 /***********************************************************************
@@ -1151,7 +1150,7 @@ static CURLcode pop3_done(struct Curl_easy *data, CURLcode status,
   Curl_safefree(pop3->custom);
 
   /* Clear the transfer mode for the next request */
-  pop3->transfer = FTPTRANSFER_BODY;
+  pop3->transfer = PPTRANSFER_BODY;
 
   return result;
 }
@@ -1175,7 +1174,7 @@ static CURLcode pop3_perform(struct Curl_easy *data, bool *connected,
 
   if(data->set.opt_no_body) {
     /* Requested no body means no transfer */
-    pop3->transfer = FTPTRANSFER_INFO;
+    pop3->transfer = PPTRANSFER_INFO;
   }
 
   *dophase_done = FALSE; /* not done yet */

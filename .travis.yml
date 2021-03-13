@@ -47,6 +47,7 @@ addons:
     - gnutls-bin
     - python-impacket
     - ninja-build
+    - libgsasl7-dev
 
 jobs:
   include:
@@ -286,6 +287,19 @@ jobs:
         - libzstd-dev
   - env:
     - T=torture
+    - OVERRIDE_CC="CC=gcc-8" OVERRIDE_CXX="CXX=g++-8"
+    addons:
+      apt:
+        <<: *common_apt
+        packages:
+        - *common_packages
+        - lcov
+        - libpsl-dev
+        - libbrotli-dev
+        - libzstd-dev
+        - libssh2-1-dev
+  - env:
+    - T=events
     - OVERRIDE_CC="CC=gcc-8" OVERRIDE_CXX="CXX=g++-8"
     addons:
       apt:

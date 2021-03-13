@@ -522,14 +522,14 @@ schannel_connect_step1(struct Curl_easy *data, struct connectdata *conn,
 #endif
         schannel_cred.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION;
 
-      if(data->set.ssl.no_revoke) {
+      if(SSL_SET_OPTION(no_revoke)) {
         schannel_cred.dwFlags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
           SCH_CRED_IGNORE_REVOCATION_OFFLINE;
 
         DEBUGF(infof(data, "schannel: disabled server certificate revocation "
                      "checks\n"));
       }
-      else if(data->set.ssl.revoke_best_effort) {
+      else if(SSL_SET_OPTION(revoke_best_effort)) {
         schannel_cred.dwFlags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
           SCH_CRED_IGNORE_REVOCATION_OFFLINE | SCH_CRED_REVOCATION_CHECK_CHAIN;
 
@@ -861,7 +861,7 @@ schannel_connect_step1(struct Curl_easy *data, struct connectdata *conn,
     list_start_index = cur;
 
 #ifdef USE_NGHTTP2
-    if(data->set.httpversion >= CURL_HTTP_VERSION_2) {
+    if(data->state.httpversion >= CURL_HTTP_VERSION_2) {
       memcpy(&alpn_buffer[cur], NGHTTP2_PROTO_ALPN, NGHTTP2_PROTO_ALPN_LEN);
       cur += NGHTTP2_PROTO_ALPN_LEN;
       infof(data, "schannel: ALPN, offering %s\n", NGHTTP2_PROTO_VERSION_ID);
@@ -1252,7 +1252,7 @@ schannel_connect_step2(struct Curl_easy *data, struct connectdata *conn,
 
   pubkey_ptr = SSL_IS_PROXY() ?
     data->set.str[STRING_SSL_PINNEDPUBLICKEY_PROXY] :
-    data->set.str[STRING_SSL_PINNEDPUBLICKEY_ORIG];
+    data->set.str[STRING_SSL_PINNEDPUBLICKEY];
   if(pubkey_ptr) {
     result = pkp_pin_peer_pubkey(data, conn, sockindex, pubkey_ptr);
     if(result) {
@@ -2383,15 +2383,6 @@ static void schannel_checksum(const unsigned char *input,
     CryptReleaseContext(hProv, 0);
 }
 
-static CURLcode schannel_md5sum(unsigned char *input,
-                                size_t inputlen,
-                                unsigned char *md5sum,
-                                size_t md5len)
-{
-  schannel_checksum(input, inputlen, md5sum, md5len, PROV_RSA_FULL, CALG_MD5);
-  return CURLE_OK;
-}
-
 static CURLcode schannel_sha256sum(const unsigned char *input,
                                    size_t inputlen,
                                    unsigned char *sha256sum,
@@ -2427,6 +2418,7 @@ const struct Curl_ssl Curl_ssl_schannel = {
   Curl_none_cert_status_request,     /* cert_status_request */
   schannel_connect,                  /* connect */
   schannel_connect_nonblocking,      /* connect_nonblocking */
+  Curl_ssl_getsock,                  /* getsock */
   schannel_get_internals,            /* get_internals */
   schannel_close,                    /* close_one */
   Curl_none_close_all,               /* close_all */
@@ -2435,7 +2427,6 @@ const struct Curl_ssl Curl_ssl_schannel = {
   Curl_none_set_engine_default,      /* set_engine_default */
   Curl_none_engines_list,            /* engines_list */
   Curl_none_false_start,             /* false_start */
-  schannel_md5sum,                   /* md5sum */
   schannel_sha256sum                 /* sha256sum */
 };
 
